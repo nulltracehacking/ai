@@ -1,0 +1,158 @@
+from flask import Flask, render_template_string, request, jsonify
+import json, os
+
+try:
+    import bluetooth
+except ImportError:
+    bluetooth = None  # Simulated mode
+
+MEMORY_FILE = 'memory.json'
+
+def load_memory():
+    if os.path.exists(MEMORY_FILE):
+        return json.load(open(MEMORY_FILE))
+    return {'devices': [], 'chats': []}
+
+def save_memory(mem):
+    with open(MEMORY_FILE, 'w') as f:
+        json.dump(mem, f)
+
+app = Flask(__name__)
+
+TEMPLATE = '''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chargy BT</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #121212;
+      color: #ffffff;
+      margin: 20px;
+    }
+    h1 { color: #00ffcc; }
+    button {
+      background-color: #1f1f1f;
+      color: #00ffcc;
+      border: 1px solid #00ffcc;
+      padding: 8px 15px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    input, textarea {
+      background-color: #1f1f1f;
+      color: #ffffff;
+      border: 1px solid #00ffcc;
+      padding: 5px;
+    }
+    #devices, #chat {
+      margin-top: 30px;
+    }
+    #chatBox {
+      width: 100%; height: 200px;
+    }
+    #input { width: 80%; }
+  </style>
+</head>
+<body>
+  <h1>Intelligent Chargy BT</h1>
+  <button onclick="scan()">🔍 Scan & Connect</button>
+  <div id="devices">
+    <h3>🧠 Remembered Devices:</h3>
+    <ul>
+      {% for d in devices %}<li>{{ d }}</li>{% else %}<li><i>No devices found.</i></li>{% endfor %}
+    </ul>
+  </div>
+  <div id="chat">
+    <h3>🤖 Chat with Smart Assistant:</h3>
+    <textarea id="chatBox" readonly></textarea><br>
+    <input id="input" placeholder="Type your question...">
+    <button onclick="sendChat()">Send</button>
+  </div>
+<script>
+function scan() {
+  fetch('/scan', {method:'POST'})
+   .then(res=>res.json())
+   .then(data=>{
+     alert(data.message);
+     location.reload();
+   });
+}
+function sendChat() {
+  const txt = document.getElementById('input').value;
+  if (!txt) return;
+  const box = document.getElementById('chatBox');
+  box.value += 'You: ' + txt + '\\n';
+  fetch('/chat', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({msg: txt})
+  })
+  .then(res=>res.json())
+  .then(data=>{
+    box.value += 'Bot: ' + data.reply + '\\n';
+    document.getElementById('input').value = '';
+  });
+}
+</script>
+</body>
+</html>
+'''
+
+@app.route('/')
+def index():
+    mem = load_memory()
+    return render_template_string(TEMPLATE, devices=mem['devices'])
+
+@app.route('/scan', methods=['POST'])
+def scan():
+    mem = load_memory()
+    found = []
+    if bluetooth:
+        try:
+            nearby = bluetooth.discover_devices(duration=4, lookup_names=True)
+            for addr, name in nearby:
+                found.append(name or addr)
+        except:
+            found = ['Scan error']
+    else:
+        found = ['Simulated_Device_BT']
+
+    new_device = None
+    for dev in found:
+        if dev not in mem['devices']:
+            mem['devices'].append(dev)
+            new_device = dev
+    save_memory(mem)
+    if new_device:
+        return jsonify({'message': f"Connected & remembered: '{new_device}'"})
+    return jsonify({'message': 'Connected to known device(s).'})
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = load_memory()
+    msg = request.json.get('msg', '')
+    msg_lower = msg.lower()
+
+    if 'hello' in msg_lower or 'hi' in msg_lower:
+        reply = 'Hello! I am your intelligent Bluetooth assistant. How can I help?'
+    elif 'device' in msg_lower:
+        reply = f"You currently have {len(data['devices'])} remembered device(s)."
+    elif 'who are you' in msg_lower:
+        reply = "I'm Chargy BT – your smart, memory-enabled, device-connecting assistant."
+    elif 'forget' in msg_lower:
+        data['devices'] = []
+        reply = 'All devices have been forgotten.'
+    elif 'bye' in msg_lower:
+        reply = 'Goodbye! Come back anytime.'
+    else:
+        reply = f"I heard you say: '{msg}'. That’s interesting!"
+
+    data['chats'].append({'user': msg, 'bot': reply})
+    save_memory(data)
+    return jsonify({'reply': reply})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
